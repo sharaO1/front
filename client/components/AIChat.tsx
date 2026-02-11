@@ -8,6 +8,7 @@ import React, {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Bot,
   Send,
@@ -27,6 +28,36 @@ type ChatMessage = {
   role: "user" | "ai";
   text: string;
 };
+
+function formatMessage(t: string): string {
+  if (!t) return "";
+  let s = t.replace(/\r\n/g, "\n");
+
+  // Normalize excessive breaks
+  s = s.replace(/\n{3,}/g, "\n\n");
+
+  // Remove single newlines inserted between non-space characters (token-per-line)
+  s = s.replace(/([^\s])\n([^\s])/g, "$1$2");
+
+  const PARA = "<<PARA>>";
+  // Preserve real paragraphs, then turn any remaining single newlines into spaces
+  s = s.replace(/\n{2,}/g, PARA);
+  s = s.replace(/\n/g, " ");
+
+  // Cleanup extra spaces
+  s = s.replace(/[\t ]{2,}/g, " ").trim();
+
+  // Restore paragraph breaks
+  s = s.replace(new RegExp(PARA, "g"), "\n\n");
+  return s;
+}
+
+function getInitials(name?: string | null, email?: string | null) {
+  const source = (name && name.trim()) || (email && email.split("@")[0]) || "U";
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return source.slice(0, 2).toUpperCase();
+}
 
 const ENV_URL = (import.meta as any)?.env?.VITE_CHAT_API_URL as
   | string
@@ -48,6 +79,39 @@ const getCandidateApiUrls = () => {
 const getCandidateResetUrls = () =>
   getCandidateApiUrls().map((u) => `${u.replace(/\/+$/, "")}/reset`);
 
+async function tryResetBackend(accessToken?: string | null) {
+  const headers: Record<string, string> = {};
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  // 1) Try explicit /reset endpoints
+  for (const url of getCandidateResetUrls()) {
+    try {
+      const res = await fetch(url, { method: "POST", headers });
+      if (res.ok) return true;
+    } catch {}
+  }
+
+  // 2) Fallback: send a reset command payload to chat endpoints
+  const payloads = [
+    { action: "reset" },
+    { reset: true },
+    { command: "reset" },
+  ];
+  for (const url of getCandidateApiUrls()) {
+    for (const body of payloads) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (res.ok) return true;
+      } catch {}
+    }
+  }
+  return false;
+}
+
 type AIChatProps = {
   variant?: "inline" | "floating"; // inline: renders inside layout. floating: shows a button and opens as a panel
   height?: string; // Tailwind height class for inline variant (e.g. "h-[70vh]")
@@ -67,6 +131,7 @@ export default function AIChat({
   const [isFullScreen, setIsFullScreen] = useState(false);
   const navigate = useNavigate();
   const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
 
   const initialMessages = useMemo<ChatMessage[]>(
     () => [
@@ -97,6 +162,12 @@ export default function AIChat({
     scrollToBottom(true);
   }, [messages, isTyping, scrollToBottom, isFullScreen]);
 
+  // Always reset conversation when component mounts (e.g., after page refresh)
+  useEffect(() => {
+    tryResetBackend(accessToken);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (isOpen) setTimeout(() => inputRef.current?.focus(), 50);
   }, [isOpen, isFullScreen]);
@@ -112,24 +183,9 @@ export default function AIChat({
     abortRef.current?.abort();
     scrollToBottom(true);
 
-    // Try notifying backend to reset server-side conversation
+    // Try notifying backend to reset server-side conversation (with fallbacks)
     try {
-      const urls = getCandidateResetUrls();
-      for (const url of urls) {
-        try {
-          const headers: Record<string, string> = {};
-          if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-          const res = await fetch(url, { method: "POST", headers });
-          if (!res.ok) continue;
-          const ct = res.headers.get("content-type") || "";
-          if (ct.includes("application/json")) {
-            await res.json();
-          }
-          break;
-        } catch {
-          continue;
-        }
-      }
+      await tryResetBackend(accessToken);
     } catch {
       // ignore errors; UI is already reset
     }
@@ -263,7 +319,7 @@ export default function AIChat({
               m.id === aiId
                 ? {
                     ...m,
-                  text: "Failed connect to Network. Please check your Internet connection!!",
+                    text: "Failed connect to Network. Please check your Internet connection!!",
                   }
                 : m,
             ),
@@ -440,12 +496,15 @@ export default function AIChat({
                             : "bg-white dark:bg-gray-800 border rounded-bl-md",
                         )}
                       >
-                        {m.text}
+                        {formatMessage(m.text)}
                       </div>
                       {m.role === "user" && (
-                        <div className="mt-1 h-8 w-8 rounded-full bg-gray-500 flex items-center justify-center shadow">
-                          <UserIcon className="h-4 w-4 text-white" />
-                        </div>
+                        <Avatar className="mt-1 h-8 w-8">
+                          <AvatarImage src={user?.avatar || undefined} alt={user?.name || user?.email || "User"} />
+                          <AvatarFallback className="bg-gray-500 text-white text-xs font-medium">
+                            {getInitials(user?.name || null, user?.email || null)}
+                          </AvatarFallback>
+                        </Avatar>
                       )}
                     </div>
                   ))}

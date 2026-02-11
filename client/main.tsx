@@ -4,6 +4,7 @@ import "./lib/i18n";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { suppressResizeObserverErrors } from "./lib/suppressWarnings";
+import { installAuthFetchInterceptor } from "./lib/api";
 
 const container = document.getElementById("root");
 
@@ -23,6 +24,9 @@ function render() {
   }
   root.render(<App />);
 }
+
+// Install global auth/refresh fetch interceptor, then render
+installAuthFetchInterceptor();
 
 // Initial render
 render();
